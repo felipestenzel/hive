@@ -1,5 +1,6 @@
 """Graph structures: Goals, Nodes, Edges, and Flexible Execution."""
 
+from framework.graph.analyzer import AnalysisReport, GraphAnalyzer, analyze_graph
 from framework.graph.client_io import (
     ActiveNodeClientIO,
     ClientIOGateway,
@@ -44,6 +45,10 @@ from framework.graph.plan import (
 from framework.graph.worker_node import StepExecutionResult, WorkerNode
 
 __all__ = [
+    # Analyzer
+    "GraphAnalyzer",
+    "AnalysisReport",
+    "analyze_graph",
     # Goal
     "Goal",
     "SuccessCriterion",

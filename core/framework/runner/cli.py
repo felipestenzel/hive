@@ -106,6 +106,16 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         type=str,
         help="Path to agent folder (containing agent.json)",
     )
+    validate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Run deep static analysis (cycles, collisions, missing inputs, cost estimation)",
+    )
+    validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
     validate_parser.set_defaults(func=cmd_validate)
 
     # list command
@@ -593,6 +603,33 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
     validation = runner.validate()
 
+    # Run deep static analysis if --strict flag is set
+    analysis_report = None
+    if getattr(args, "strict", False):
+        from framework.graph.analyzer import GraphAnalyzer
+
+        analyzer = GraphAnalyzer(runner.graph)
+        analysis_report = analyzer.analyze()
+
+    # JSON output mode
+    if getattr(args, "json", False):
+        output = {
+            "valid": validation.valid,
+            "errors": validation.errors,
+            "warnings": validation.warnings,
+            "missing_tools": validation.missing_tools,
+            "missing_credentials": validation.missing_credentials,
+        }
+        if analysis_report:
+            output["analysis"] = analysis_report.to_dict()
+        print(json.dumps(output, indent=2))
+        runner.cleanup()
+        # With --strict, fail if analysis found errors too
+        if analysis_report and analysis_report.has_errors:
+            return 1
+        return 0 if validation.valid else 1
+
+    # Human-readable output
     if validation.valid:
         print("✓ Agent is valid")
     else:
@@ -611,8 +648,48 @@ def cmd_validate(args: argparse.Namespace) -> int:
             print(f"  - {tool}")
         print("\nTo fix: Create tools.py in the agent folder or register tools programmatically")
 
+    # Show analysis report if --strict was used
+    if analysis_report:
+        print("\n" + "=" * 60)
+        print("STATIC ANALYSIS REPORT (--strict)")
+        print("=" * 60)
+
+        if analysis_report.has_errors:
+            print("\n✗ Analysis Errors:")
+            for error in analysis_report.errors:
+                print(f"  ERROR: {error}")
+
+        if analysis_report.has_warnings:
+            print("\n⚠ Analysis Warnings:")
+            for warning in analysis_report.warnings:
+                print(f"  WARNING: {warning}")
+
+        if analysis_report.info:
+            print("\nℹ Info:")
+            for info_msg in analysis_report.info:
+                print(f"  {info_msg}")
+
+        print("\nMetrics:")
+        print(f"  Total nodes: {analysis_report.total_node_count}")
+        print(f"  Total edges: {analysis_report.total_edge_count}")
+        print(f"  LLM nodes: {analysis_report.llm_node_count}")
+        print(f"  Estimated tokens: ~{analysis_report.estimated_tokens}")
+
+        if analysis_report.cycles:
+            print(f"\nCycles detected: {len(analysis_report.cycles)}")
+        if analysis_report.unreachable_nodes:
+            print(f"Unreachable nodes: {analysis_report.unreachable_nodes}")
+        if analysis_report.dead_end_nodes:
+            print(f"Dead-end nodes: {analysis_report.dead_end_nodes}")
+
     runner.cleanup()
-    return 0 if validation.valid else 1
+
+    # Determine exit code
+    if not validation.valid:
+        return 1
+    if analysis_report and analysis_report.has_errors:
+        return 1
+    return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
