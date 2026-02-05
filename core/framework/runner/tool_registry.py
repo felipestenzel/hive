@@ -457,6 +457,59 @@ class ToolRegistry:
 
         return tool
 
+    def get_mcp_health(self) -> dict[str, Any]:
+        """
+        Get health status of all MCP server connections.
+
+        Returns circuit breaker state and stats for each connected MCP server.
+
+        Returns:
+            Dict with server health information:
+            {
+                "server-name": {
+                    "state": "closed" | "open" | "half_open",
+                    "failure_count": int,
+                    "success_count": int,
+                    "last_error": str | None,
+                    ...
+                }
+            }
+        """
+        from framework.runner.circuit_breaker import get_circuit_breaker
+
+        breaker = get_circuit_breaker()
+        health = breaker.get_health_report()
+
+        # Add connection status for each MCP client
+        for client in self._mcp_clients:
+            server_name = client.config.name
+            if server_name not in health:
+                health[server_name] = {
+                    "state": "closed",
+                    "failure_count": 0,
+                    "success_count": 0,
+                    "last_error": None,
+                }
+            health[server_name]["connected"] = client._connected
+            health[server_name]["transport"] = client.config.transport
+
+        return health
+
+    def reset_circuit_breaker(self, server_name: str | None = None) -> None:
+        """
+        Reset circuit breaker for MCP server(s).
+
+        Args:
+            server_name: Specific server to reset, or None to reset all
+        """
+        from framework.runner.circuit_breaker import get_circuit_breaker
+
+        breaker = get_circuit_breaker()
+        if server_name:
+            breaker.reset(server_name)
+        else:
+            breaker.reset_all()
+
     def cleanup(self) -> None:
         """Clean up all MCP client connections."""
         for client in self._mcp_clients:

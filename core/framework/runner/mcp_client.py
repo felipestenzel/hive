@@ -332,27 +332,72 @@ class MCPClient:
 
         return list(self._tools.values())
 
-    def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+    def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        use_circuit_breaker: bool = True,
+    ) -> Any:
         """
         Invoke a tool on the MCP server.
+
+        Uses circuit breaker pattern to fail fast when server is degraded.
 
         Args:
             tool_name: Name of the tool to invoke
             arguments: Tool arguments
+            use_circuit_breaker: Whether to use circuit breaker (default True)
 
         Returns:
             Tool result
+
+        Raises:
+            CircuitOpenError: If circuit is open for this server
+            ValueError: If tool is unknown
+            RuntimeError: If tool execution fails
         """
+        from framework.runner.circuit_breaker import (
+            CircuitOpenError,
+            get_circuit_breaker,
+        )
+
         if not self._connected:
             self.connect()
 
         if tool_name not in self._tools:
             raise ValueError(f"Unknown tool: {tool_name}")
 
-        if self.config.transport == "stdio":
-            return self._run_async(self._call_tool_stdio_async(tool_name, arguments))
-        else:
-            return self._call_tool_http(tool_name, arguments)
+        server_name = self.config.name
+
+        # Check circuit breaker
+        if use_circuit_breaker:
+            breaker = get_circuit_breaker()
+            if not breaker.allow_request(server_name):
+                logger.warning(
+                    f"Circuit open for MCP server '{server_name}', "
+                    f"failing fast for tool '{tool_name}'"
+                )
+                raise CircuitOpenError(server_name)
+
+        try:
+            if self.config.transport == "stdio":
+                result = self._run_async(self._call_tool_stdio_async(tool_name, arguments))
+            else:
+                result = self._call_tool_http(tool_name, arguments)
+
+            # Record success with circuit breaker
+            if use_circuit_breaker:
+                breaker = get_circuit_breaker()
+                breaker.record_success(server_name)
+
+            return result
+
+        except Exception as e:
+            # Record failure with circuit breaker (but not for CircuitOpenError)
+            if use_circuit_breaker and not isinstance(e, CircuitOpenError):
+                breaker = get_circuit_breaker()
+                breaker.record_failure(server_name, e)
+            raise
 
     async def _call_tool_stdio_async(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         """Call tool via STDIO protocol using persistent session."""
