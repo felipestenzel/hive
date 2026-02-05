@@ -434,6 +434,10 @@ class GraphSpec(BaseModel):
     # Execution limits
     max_steps: int = Field(default=100, description="Maximum node executions before timeout")
     max_retries_per_node: int = 3
+    token_budget: int | None = Field(
+        default=None,
+        description="Maximum total tokens for the entire execution. None means unlimited.",
+    )
 
     # EventLoopNode configuration (from configure_loop)
     loop_config: dict[str, Any] = Field(

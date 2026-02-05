@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- graph: Token budget enforcement for execution cost control (`GraphSpec.token_budget`, `--max-tokens` CLI flag)
 
 ### Changed
 

@@ -22,6 +22,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from framework.graph.conversation import ConversationStore, NodeConversation
 from framework.graph.node import NodeContext, NodeProtocol, NodeResult
+from framework.graph.token_budget import TokenBudgetExceeded
 from framework.llm.provider import Tool, ToolResult, ToolUse
 from framework.llm.stream_events import (
     FinishEvent,
@@ -391,7 +392,26 @@ class EventLoopNode(NodeProtocol):
                 # Re-raise to maintain existing error handling
                 raise
 
-            # 6e'. Feed actual API token count back for accurate estimation
+            # 6e'. Enforce token budget per turn
+            if ctx.token_budget is not None:
+                turn_total = turn_tokens.get("input", 0) + turn_tokens.get("output", 0)
+                try:
+                    ctx.token_budget.record(turn_total)
+                except TokenBudgetExceeded:
+                    logger.warning("[%s] Token budget exceeded at iteration %d", node_id, iteration)
+                    latency_ms = int((time.time() - start_time) * 1000)
+                    return NodeResult(
+                        success=False,
+                        error=(
+                            f"Token budget exceeded during event loop "
+                            f"(node: {node_id}, iteration: {iteration})"
+                        ),
+                        output=accumulator.to_dict(),
+                        tokens_used=total_input_tokens + total_output_tokens,
+                        latency_ms=latency_ms,
+                    )
+
+            # 6e''. Feed actual API token count back for accurate estimation
             turn_input = turn_tokens.get("input", 0)
             if turn_input > 0:
                 conversation.update_token_count(turn_input)

@@ -31,6 +31,7 @@ from framework.graph.node import (
     SharedMemory,
 )
 from framework.graph.output_cleaner import CleansingConfig, OutputCleaner
+from framework.graph.token_budget import TokenBudget, TokenBudgetExceeded
 from framework.graph.validator import OutputValidator
 from framework.llm.provider import LLMProvider, Tool
 from framework.runtime.core import Runtime
@@ -282,6 +283,10 @@ class GraphExecutor:
         path: list[str] = []
         total_tokens = 0
         total_latency = 0
+        token_budget: TokenBudget | None = None
+        if graph.token_budget is not None:
+            token_budget = TokenBudget(limit=graph.token_budget)
+            self.logger.info("   Token budget: %s", f"{graph.token_budget:,}")
         node_retry_counts: dict[str, int] = {}  # Track retries per node
         node_visit_counts: dict[str, int] = {}  # Track visits for feedback loops
         _is_retry = False  # True when looping back for a retry (not a new visit)
@@ -519,6 +524,7 @@ class GraphExecutor:
                     goal=goal,
                     input_data=input_data or {},
                     max_tokens=graph.max_tokens,
+                    token_budget=token_budget,
                 )
 
                 # Log actual input data being read
@@ -651,6 +657,46 @@ class GraphExecutor:
 
                 total_tokens += result.tokens_used
                 total_latency += result.latency_ms
+
+                # Enforce token budget (skip event_loop nodes — they record
+                # per-turn inside the loop to enable early abort)
+                if token_budget is not None and node_spec.node_type != "event_loop":
+                    try:
+                        token_budget.record(result.tokens_used)
+                    except TokenBudgetExceeded:
+                        self.logger.error(
+                            "   Token budget exceeded: %s/%s",
+                            f"{total_tokens:,}",
+                            f"{graph.token_budget:,}",
+                        )
+                        self.runtime.end_run(
+                            success=False,
+                            output_data=memory.read_all(),
+                            narrative=(
+                                f"Token budget exceeded at node '{node_spec.name}' "
+                                f"({total_tokens:,}/{graph.token_budget:,} tokens)"
+                            ),
+                        )
+                        total_retries_count = sum(node_retry_counts.values())
+                        nodes_failed = list(node_retry_counts.keys())
+                        return ExecutionResult(
+                            success=False,
+                            error=(
+                                f"Token budget exceeded: {total_tokens:,} tokens used "
+                                f"(budget: {graph.token_budget:,})"
+                            ),
+                            output=memory.read_all(),
+                            steps_executed=steps,
+                            total_tokens=total_tokens,
+                            total_latency_ms=total_latency,
+                            path=path,
+                            total_retries=total_retries_count,
+                            nodes_with_failures=nodes_failed,
+                            retry_details=dict(node_retry_counts),
+                            had_partial_failures=len(nodes_failed) > 0,
+                            execution_quality="failed",
+                            node_visit_counts=dict(node_visit_counts),
+                        )
 
                 # Handle failure
                 if not result.success:
@@ -859,10 +905,51 @@ class GraphExecutor:
                             source_result=result,
                             source_node_spec=node_spec,
                             path=path,
+                            token_budget=token_budget,
                         )
 
                         total_tokens += branch_tokens
                         total_latency += branch_latency
+
+                        # Enforce token budget after parallel branches
+                        if token_budget is not None:
+                            try:
+                                token_budget.record(branch_tokens)
+                            except TokenBudgetExceeded:
+                                self.logger.error(
+                                    "   Token budget exceeded during parallel execution: %s/%s",
+                                    f"{total_tokens:,}",
+                                    f"{graph.token_budget:,}",
+                                )
+                                self.runtime.end_run(
+                                    success=False,
+                                    output_data=memory.read_all(),
+                                    narrative=(
+                                        f"Token budget exceeded during parallel "
+                                        f"execution ({total_tokens:,}/"
+                                        f"{graph.token_budget:,} tokens)"
+                                    ),
+                                )
+                                total_retries_count = sum(node_retry_counts.values())
+                                nodes_failed = list(node_retry_counts.keys())
+                                return ExecutionResult(
+                                    success=False,
+                                    error=(
+                                        f"Token budget exceeded: {total_tokens:,} tokens used "
+                                        f"(budget: {graph.token_budget:,})"
+                                    ),
+                                    output=memory.read_all(),
+                                    steps_executed=steps,
+                                    total_tokens=total_tokens,
+                                    total_latency_ms=total_latency,
+                                    path=path,
+                                    total_retries=total_retries_count,
+                                    nodes_with_failures=nodes_failed,
+                                    retry_details=dict(node_retry_counts),
+                                    had_partial_failures=len(nodes_failed) > 0,
+                                    execution_quality="failed",
+                                    node_visit_counts=dict(node_visit_counts),
+                                )
 
                         # Continue from fan-in node
                         if fan_in_node:
@@ -1116,6 +1203,7 @@ class GraphExecutor:
         goal: Goal,
         input_data: dict[str, Any],
         max_tokens: int = 4096,
+        token_budget: TokenBudget | None = None,
     ) -> NodeContext:
         """Build execution context for a node."""
         # Filter tools to those available to this node
@@ -1142,6 +1230,7 @@ class GraphExecutor:
             max_tokens=max_tokens,
             runtime_logger=self.runtime_logger,
             pause_event=self._pause_requested,  # Pass pause event for granular control
+            token_budget=token_budget,
         )
 
     # Valid node types - no ambiguous "llm" type allowed
@@ -1436,6 +1525,7 @@ class GraphExecutor:
         source_result: NodeResult,
         source_node_spec: Any,
         path: list[str],
+        token_budget: TokenBudget | None = None,
     ) -> tuple[dict[str, NodeResult], int, int]:
         """
         Execute multiple branches in parallel using asyncio.gather.
@@ -1448,6 +1538,7 @@ class GraphExecutor:
             source_result: Result from the source node
             source_node_spec: Spec of the source node
             path: Execution path list to update
+            token_budget: Optional token budget for cost enforcement
 
         Returns:
             Tuple of (branch_results dict, total_tokens, total_latency)
@@ -1528,7 +1619,9 @@ class GraphExecutor:
                     branch.retry_count = attempt
 
                     # Build context for this branch
-                    ctx = self._build_context(node_spec, memory, goal, mapped, graph.max_tokens)
+                    ctx = self._build_context(
+                        node_spec, memory, goal, mapped, graph.max_tokens, token_budget
+                    )
                     node_impl = self._get_node_implementation(node_spec, graph.cleanup_llm_model)
 
                     # Emit node-started event (skip event_loop nodes)

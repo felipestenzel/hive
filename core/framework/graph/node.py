@@ -473,6 +473,9 @@ class NodeContext:
     # LLM configuration
     max_tokens: int = 4096  # Maximum tokens for LLM responses
 
+    # Token budget (if set, event_loop nodes check per turn)
+    token_budget: Any = None  # TokenBudget instance or None
+
     # Execution metadata
     attempt: int = 1
     max_attempts: int = 3

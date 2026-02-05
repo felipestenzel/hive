@@ -75,6 +75,19 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="Resume from a specific checkpoint (requires --resume-session)",
     )
+
+    def _positive_int(value: str) -> int:
+        ivalue = int(value)
+        if ivalue < 1:
+            raise argparse.ArgumentTypeError(f"--max-tokens must be >= 1, got {ivalue}")
+        return ivalue
+
+    run_parser.add_argument(
+        "--max-tokens",
+        type=_positive_int,
+        default=None,
+        help="Maximum total tokens for the entire execution (budget enforcement)",
+    )
     run_parser.set_defaults(func=cmd_run)
 
     # info command
@@ -380,6 +393,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                     print(f"Error loading agent: {e}")
                     return
 
+                # Apply CLI token budget override
+                if args.max_tokens is not None:
+                    runner.graph.token_budget = args.max_tokens
+
                 # Force setup inside the loop
                 if runner._agent_runtime is None:
                     runner._setup()
@@ -420,6 +437,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         except FileNotFoundError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
+
+        # Apply CLI token budget override
+        if args.max_tokens is not None:
+            runner.graph.token_budget = args.max_tokens
 
         # Auto-inject user_id if the agent expects it but it's not provided
         entry_input_keys = runner.graph.nodes[0].input_keys if runner.graph.nodes else []
