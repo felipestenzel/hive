@@ -199,6 +199,7 @@ def load_agent_export(data: str | dict) -> tuple[GraphSpec, Goal]:
         edges=edges,
         max_steps=graph_data.get("max_steps", 100),
         max_retries_per_node=graph_data.get("max_retries_per_node", 3),
+        prompt_injection_shield=graph_data.get("prompt_injection_shield"),
         description=graph_data.get("description", ""),
     )
 

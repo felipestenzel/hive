@@ -22,6 +22,10 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from framework.graph.conversation import ConversationStore, NodeConversation
 from framework.graph.node import NodeContext, NodeProtocol, NodeResult
+from framework.graph.prompt_injection_shield import (
+    InjectionDetected,
+    PromptInjectionShield,
+)
 from framework.llm.provider import Tool, ToolResult, ToolUse
 from framework.llm.stream_events import (
     FinishEvent,
@@ -87,6 +91,10 @@ class LoopConfig:
     # ``None`` the result is simply truncated with an explanatory note.
     max_tool_result_chars: int = 3_000
     spillover_dir: str | None = None  # Path string; created on first use
+
+    # --- Prompt injection defense ---
+    # Shield mode: "warn" (log + wrap), "block" (reject suspicious), None/"off" (disabled)
+    prompt_injection_shield: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +193,12 @@ class EventLoopNode(NodeProtocol):
         # Client-facing input blocking state
         self._input_ready = asyncio.Event()
         self._shutdown = False
+
+        # Prompt injection shield (lazy-init from config)
+        self._shield: PromptInjectionShield | None = None
+        shield_mode = self._config.prompt_injection_shield
+        if shield_mode and shield_mode != "off":
+            self._shield = PromptInjectionShield(mode=shield_mode)
 
     def validate_input(self, ctx: NodeContext) -> list[str]:
         """Validate hard requirements only.
@@ -1023,6 +1037,31 @@ class EventLoopNode(NodeProtocol):
                     # --- Real tool execution ---
                     result = await self._execute_tool(tc)
                     result = self._truncate_tool_result(result, tc.tool_name)
+
+                    # --- Prompt injection shield ---
+                    # Scan external tool results before they enter LLM context.
+                    # set_output is framework-internal and skipped (handled above).
+                    if self._shield is not None and not result.is_error:
+                        try:
+                            scan = self._shield.scan(
+                                content=result.content,
+                                tool_name=tc.tool_name,
+                            )
+                            result = ToolResult(
+                                tool_use_id=result.tool_use_id,
+                                content=scan.wrapped_content,
+                                is_error=result.is_error,
+                            )
+                        except InjectionDetected:
+                            result = ToolResult(
+                                tool_use_id=result.tool_use_id,
+                                content=(
+                                    f"[BLOCKED] Tool result from '{tc.tool_name}' "
+                                    f"was rejected by the prompt injection shield."
+                                ),
+                                is_error=True,
+                            )
+
                     tool_entry = {
                         "tool_use_id": tc.tool_use_id,
                         "tool_name": tc.tool_name,

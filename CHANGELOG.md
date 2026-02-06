@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Empty memory on resume by ensuring session_state["memory"] is properly populated
 
 ### Security
-- N/A
+- Added `PromptInjectionShield` — regex-based prompt injection defense for tool results in `EventLoopNode` (OWASP LLM01). Supports `warn` (log + XML delimiter wrapping) and `block` (reject suspicious results) modes. Configurable via `prompt_injection_shield` field in `GraphSpec` and `agent.json`.
 
 ## [0.1.0] - 2025-01-13
 

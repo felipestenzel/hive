@@ -441,6 +441,16 @@ class GraphSpec(BaseModel):
         description="EventLoopNode configuration (max_iterations, max_tool_calls_per_turn, etc.)",
     )
 
+    # Security
+    prompt_injection_shield: str | None = Field(
+        default=None,
+        description=(
+            "Prompt injection defense mode for tool results. "
+            "'warn' = log + wrap in delimiters, 'block' = reject suspicious results, "
+            "None or 'off' = disabled."
+        ),
+    )
+
     # Metadata
     description: str = ""
     created_by: str = ""  # "human" or "builder_agent"

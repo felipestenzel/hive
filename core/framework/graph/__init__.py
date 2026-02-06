@@ -41,6 +41,12 @@ from framework.graph.plan import (
     StepStatus,
     load_export,
 )
+from framework.graph.prompt_injection_shield import (
+    InjectionDetected,
+    PromptInjectionShield,
+    ScanResult,
+    ShieldMode,
+)
 from framework.graph.worker_node import StepExecutionResult, WorkerNode
 
 __all__ = [
@@ -100,6 +106,11 @@ __all__ = [
     # Context Handoff
     "ContextHandoff",
     "HandoffContext",
+    # Prompt Injection Shield
+    "PromptInjectionShield",
+    "InjectionDetected",
+    "ScanResult",
+    "ShieldMode",
     # Client I/O
     "NodeClientIO",
     "ActiveNodeClientIO",

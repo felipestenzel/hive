@@ -534,7 +534,9 @@ class GraphExecutor:
                             self.logger.info(f"      {key}: {value_str}")
 
                 # Get or create node implementation
-                node_impl = self._get_node_implementation(node_spec, graph.cleanup_llm_model)
+                node_impl = self._get_node_implementation(
+                    node_spec, graph.cleanup_llm_model, graph.prompt_injection_shield
+                )
 
                 # Validate inputs
                 validation_errors = node_impl.validate_input(ctx)
@@ -1156,7 +1158,10 @@ class GraphExecutor:
     DEPRECATED_NODE_TYPES = {"llm_tool_use": "event_loop", "llm_generate": "event_loop"}
 
     def _get_node_implementation(
-        self, node_spec: NodeSpec, cleanup_llm_model: str | None = None
+        self,
+        node_spec: NodeSpec,
+        cleanup_llm_model: str | None = None,
+        prompt_injection_shield: str | None = None,
     ) -> NodeProtocol:
         """Get or create a node implementation."""
         # Check registry first
@@ -1255,6 +1260,7 @@ class GraphExecutor:
                     max_history_tokens=lc.get("max_history_tokens", 32000),
                     max_tool_result_chars=lc.get("max_tool_result_chars", 3_000),
                     spillover_dir=spillover,
+                    prompt_injection_shield=prompt_injection_shield,
                 ),
                 tool_executor=self.tool_executor,
                 conversation_store=conv_store,
@@ -1529,7 +1535,9 @@ class GraphExecutor:
 
                     # Build context for this branch
                     ctx = self._build_context(node_spec, memory, goal, mapped, graph.max_tokens)
-                    node_impl = self._get_node_implementation(node_spec, graph.cleanup_llm_model)
+                    node_impl = self._get_node_implementation(
+                        node_spec, graph.cleanup_llm_model, graph.prompt_injection_shield
+                    )
 
                     # Emit node-started event (skip event_loop nodes)
                     if self._event_bus and node_spec.node_type != "event_loop":
