@@ -1061,6 +1061,15 @@ class EventLoopNode(NodeProtocol):
                                 ),
                                 is_error=True,
                             )
+                        except Exception:
+                            # Shield must never crash the node — fail open
+                            # and let the original result through.
+                            logger.warning(
+                                "Prompt injection shield error on tool '%s', "
+                                "passing result through unscanned",
+                                tc.tool_name,
+                                exc_info=True,
+                            )
 
                     tool_entry = {
                         "tool_use_id": tc.tool_use_id,
